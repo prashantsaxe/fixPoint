@@ -21,10 +21,11 @@ const (
 type Proxy struct {
 	listenAddr   string
 	debuggerAddr string
+	apiKey       string
 }
 
-func NewProxy(listenAddr, debuggerAddr string) *Proxy {
-	return &Proxy{listenAddr: listenAddr, debuggerAddr: debuggerAddr}
+func NewProxy(listenAddr, debuggerAddr, apiKey string) *Proxy {
+	return &Proxy{listenAddr: listenAddr, debuggerAddr: debuggerAddr, apiKey: apiKey}
 }
 
 func (p *Proxy) ListenAndServe() error {
@@ -179,5 +180,18 @@ func (s *session) handleStoppedEvent(msg dap.Message) {
 			return
 		}
 		log.Printf("Captured DebugContext: %s", ctxJSON)
+
+		if strings.TrimSpace(s.proxy.apiKey) == "" {
+			log.Printf("warning: -apikey not provided; skipping AI analysis")
+			return
+		}
+
+		analysis, err := GetFixFromAI(ctx, s.proxy.apiKey)
+		if err != nil {
+			log.Printf("AI analysis failed: %v", err)
+			return
+		}
+
+		log.Printf("🤖 FixPoint AI Analysis:\n%s", analysis)
 	}()
 }

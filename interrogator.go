@@ -65,7 +65,7 @@ func (i *Interrogator) Close() {
 	}
 }
 
-func (i *Interrogator) CaptureContext(threadID int) (*DebugContext, error) {
+func (i *Interrogator) CaptureContext(threadID int, reason string) (*DebugContext, error) {
 	stackReq := &dap.StackTraceRequest{
 		Request: dap.Request{
 			ProtocolMessage: dap.ProtocolMessage{Type: "request"},
@@ -148,7 +148,7 @@ func (i *Interrogator) CaptureContext(threadID int) (*DebugContext, error) {
 	}
 
 	context := &DebugContext{
-		Reason:     "breakpoint",
+		Reason:     reason,
 		ThreadID:   threadID,
 		FrameID:    frame.Id,
 		SourcePath: sourcePath,
@@ -158,7 +158,7 @@ func (i *Interrogator) CaptureContext(threadID int) (*DebugContext, error) {
 	}
 
 	if sourcePath != "" {
-		snippet, err := GetWindow(sourcePath, frame.Line)
+		snippet, err := i.source.GetEnclosingFunction(sourcePath, frame.Line)
 		if err != nil {
 			return context, fmt.Errorf("source window read failed: %w", err)
 		}

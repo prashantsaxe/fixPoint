@@ -3,10 +3,11 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 )
-
-const sourceWindowSize = 15
 
 type SourceReader struct{}
 
@@ -14,59 +15,80 @@ func NewSourceReader() *SourceReader {
 	return &SourceReader{}
 }
 
-func GetWindow(path string, line int) ([]SourceLine, error) {
-	return NewSourceReader().GetWindow(path, line)
-}
-
-// GetWindow returns sourceWindowSize lines centered around the requested line.
-func (s *SourceReader) GetWindow(path string, line int) ([]SourceLine, error) {
+func (s *SourceReader) GetEnclosingFunction(path string, targetLine int) ([]SourceLine, error) {
 	if path == "" {
 		return nil, fmt.Errorf("source path is empty")
 	}
 
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		// Fallback to ±10 lines
+		return s.getFallbackWindow(path, targetLine)
+	}
+
+	var startLine, endLine int
+	ast.Inspect(node, func(n ast.Node) bool {
+		if n == nil {
+			return false
+		}
+		
+		switch fn := n.(type) {
+		case *ast.FuncDecl:
+			pos := fset.Position(fn.Pos()).Line
+			end := fset.Position(fn.End()).Line
+			if targetLine >= pos && targetLine <= end {
+				startLine = pos
+				endLine = end
+			}
+		case *ast.FuncLit:
+			pos := fset.Position(fn.Pos()).Line
+			end := fset.Position(fn.End()).Line
+			if targetLine >= pos && targetLine <= end {
+				startLine = pos
+				endLine = end
+			}
+		}
+		return true
+	})
+
+	if startLine == 0 || endLine == 0 {
+		return s.getFallbackWindow(path, targetLine)
+	}
+
+	return s.readLines(path, startLine, endLine)
+}
+
+func (s *SourceReader) getFallbackWindow(path string, targetLine int) ([]SourceLine, error) {
+	startLine := targetLine - 10
+	if startLine < 1 {
+		startLine = 1
+	}
+	endLine := targetLine + 10
+	return s.readLines(path, startLine, endLine)
+}
+
+func (s *SourceReader) readLines(path string, startLine, endLine int) ([]SourceLine, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	var lines []string
+	var out []SourceLine
 	scanner := bufio.NewScanner(f)
+	currentLine := 1
 	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
+		if currentLine >= startLine && currentLine <= endLine {
+			out = append(out, SourceLine{LineNumber: currentLine, Text: scanner.Text()})
+		}
+		if currentLine > endLine {
+			break
+		}
+		currentLine++
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	if len(lines) == 0 {
-		return nil, nil
-	}
-
-	if line < 1 {
-		line = 1
-	}
-	if line > len(lines) {
-		line = len(lines)
-	}
-
-	half := sourceWindowSize / 2
-	start := line - half
-	if start < 1 {
-		start = 1
-	}
-	end := start + sourceWindowSize - 1
-	if end > len(lines) {
-		end = len(lines)
-		start = end - sourceWindowSize + 1
-		if start < 1 {
-			start = 1
-		}
-	}
-
-	out := make([]SourceLine, 0, end-start+1)
-	for i := start; i <= end; i++ {
-		out = append(out, SourceLine{LineNumber: i, Text: lines[i-1]})
-	}
-
 	return out, nil
 }

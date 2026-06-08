@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -43,7 +44,10 @@ func GetFixFromAI(ctx *DebugContext, apiKey string) (string, error) {
 		return "", err
 	}
 
-	reqCtx, cancel := stdctx.WithTimeout(stdctx.Background(), 30*time.Second)
+	payloadSizeKB := float64(len(payload)) / 1024.0
+	log.Printf("[FixPoint] Sending AI request (Payload: %.2f KB)...", payloadSizeKB)
+
+	reqCtx, cancel := stdctx.WithTimeout(stdctx.Background(), 90*time.Second)
 	defer cancel()
 
 	endpoint := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
@@ -55,7 +59,7 @@ func GetFixFromAI(ctx *DebugContext, apiKey string) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-goog-api-key", apiKey)
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 90 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err

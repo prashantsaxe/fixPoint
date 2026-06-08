@@ -2,11 +2,11 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"sync"
 
@@ -153,45 +153,67 @@ func (s *session) handleStoppedEvent(msg dap.Message) {
 	if !ok {
 		return
 	}
-	if !strings.EqualFold(stopped.Body.Reason, "breakpoint") {
+	
+	reason := strings.ToLower(stopped.Body.Reason)
+	validReasons := map[string]bool{
+		"breakpoint": true, "step": true, "exception": true, "panic": true, "error": true,
+	}
+	if !validReasons[reason] {
 		return
 	}
 
 	body := stopped.Body
-	log.Printf("🎯 Breakpoint Hit! Reason: %s, ThreadId: %d", body.Reason, body.ThreadId)
-
-	raw, err := json.Marshal(stopped)
-	if err != nil {
-		log.Printf("failed to marshal stopped event: %v", err)
-	} else {
-		log.Printf("StoppedEvent raw JSON: %s", raw)
-	}
+	fmt.Println(RenderBreakpointHeader(body.Reason, body.ThreadId))
 
 	threadID := body.ThreadId
 	go func() {
-		ctx, err := s.interrogator.CaptureContext(threadID)
+		ctx, err := s.interrogator.CaptureContext(threadID, body.Reason)
 		if err != nil {
 			log.Printf("context capture failed: %v", err)
 			return
 		}
-		ctxJSON, err := json.Marshal(ctx)
-		if err != nil {
-			log.Printf("context marshal failed: %v", err)
-			return
+		if sourceWindow := RenderSourceWindow(ctx); sourceWindow != "" {
+			fmt.Println(sourceWindow)
 		}
-		log.Printf("Captured DebugContext: %s", ctxJSON)
 
 		if strings.TrimSpace(s.proxy.apiKey) == "" {
-			log.Printf("warning: -apikey not provided; skipping AI analysis")
+			fmt.Println(RenderWarning("-apikey not provided; skipping AI analysis"))
 			return
 		}
 
-		analysis, err := GetFixFromAI(ctx, s.proxy.apiKey)
-		if err != nil {
-			log.Printf("AI analysis failed: %v", err)
-			return
+		runAI := func() {
+			spinner := NewSpinner()
+			spinner.Start()
+
+			analysis, err := GetFixFromAI(ctx, s.proxy.apiKey)
+			
+			spinner.Stop()
+
+			if err != nil {
+				log.Printf("AI analysis failed: %v", err)
+				return
+			}
+
+			fmt.Println(RenderAIResponseCard(analysis))
 		}
 
-		log.Printf("🤖 FixPoint AI Analysis:\n%s", analysis)
+		if reason == "exception" || reason == "panic" || reason == "error" {
+			runAI()
+		} else if reason == "breakpoint" || reason == "step" {
+			fmt.Println("\nLocal Variables:")
+			for _, v := range ctx.Variables {
+				fmt.Printf("  %s = %s\n", v.Name, v.Value)
+			}
+			
+			fmt.Print("\n[FixPoint] Breakpoint hit. Press [Enter] to run AI analysis, or type 'c' to skip: ")
+			reader := bufio.NewReader(os.Stdin)
+			input, _ := reader.ReadString('\n')
+			input = strings.TrimSpace(input)
+			if input == "" {
+				runAI()
+			} else {
+				fmt.Println("Skipping AI analysis.")
+			}
+		}
 	}()
 }

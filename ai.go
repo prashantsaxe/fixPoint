@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -50,7 +49,8 @@ func GetFixFromAI(ctx *DebugContext) (string, error) {
 	}
 
 	payloadSizeKB := float64(len(payload)) / 1024.0
-	log.Printf("[FixPoint] Sending AI request (Payload: %.2f KB, Model: %s)...", payloadSizeKB, model)
+	infoMsg := fmt.Sprintf("Sending AI request (Payload: %.2f KB, Model: %s)...", payloadSizeKB, model)
+	fmt.Println(RenderInfo(infoMsg))
 
 	reqCtx, cancel := stdctx.WithTimeout(stdctx.Background(), 90*time.Second)
 	defer cancel()

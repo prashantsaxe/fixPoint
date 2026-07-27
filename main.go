@@ -13,13 +13,20 @@ import (
 	"github.com/joho/godotenv"
 )
 
+var VerboseLogging bool
+
 func main() {
 	listenAddr := flag.String("listen", defaultListenAddr, "address for IDE connections")
 	debuggerAddr := flag.String("debugger", "", "debugger address (skip auto-spawn, e.g. 127.0.0.1:36281)")
+	verbose := flag.Bool("verbose", false, "enable detailed debugging logs")
 	flag.Parse()
 
+	VerboseLogging = *verbose
+
 	if err := godotenv.Load(); err != nil {
-		log.Printf("warning: no .env file found: %v", err)
+		if VerboseLogging {
+			log.Printf("warning: no .env file found: %v", err)
+		}
 	}
 
 	var delveCmd *exec.Cmd
@@ -32,9 +39,13 @@ func main() {
 		delveCmd = cmd
 		addr := fmt.Sprintf("127.0.0.1:%d", delvePort)
 		debuggerAddr = &addr
-		log.Printf("Delve DAP backend spawned on %s", *debuggerAddr)
+		if VerboseLogging {
+			log.Printf("Delve DAP backend spawned on %s", *debuggerAddr)
+		}
 	} else {
-		log.Printf("connecting to external debugger at %s", *debuggerAddr)
+		if VerboseLogging {
+			log.Printf("connecting to external debugger at %s", *debuggerAddr)
+		}
 	}
 
 	proxy := NewProxy(*listenAddr, *debuggerAddr)
@@ -44,7 +55,7 @@ func main() {
 
 	go func() {
 		<-ctx.Done()
-		log.Println("shutting down...")
+		fmt.Println(RenderInfo("\nShutting down FixPoint..."))
 		if delveCmd != nil && delveCmd.Process != nil {
 			delveCmd.Process.Kill()
 		}

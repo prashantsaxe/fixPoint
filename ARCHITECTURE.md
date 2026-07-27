@@ -1,98 +1,96 @@
 # High Level Design (HLD): FixPoint Architecture
 
-FixPoint acts as a man-in-the-middle (MITM) proxy between your Integrated Development Environment (IDE) and your Debug Adapter Protocol (DAP) server (e.g., Go's Delve). By sitting in the middle of the communication stream, it can seamlessly intercept events, interrogate the debugger for context, and pass that context to an AI for analysis—all without modifying your IDE or debugger.
+FixPoint acts as a **man-in-the-middle (MITM) proxy** between your Integrated Development Environment (IDE) and your Debug Adapter Protocol (DAP) server (e.g., Go's Delve). 
 
-Here is a breakdown of how the system works end-to-end.
+To a new developer, it's crucial to understand that **VS Code is NOT directly connected to your code's debugger**. Instead, FixPoint sits in the middle, intercepting communication so it can analyze crashes with AI before passing them to you.
 
 ---
 
-## 1. System Components
+## 1. The Core Illusion: Ports and Connections
+
+Here is exactly how the setup works across network ports:
+
+1. **The Real Debugger (Delve)** runs on **Port 36281**. It is actively debugging your Go code.
+2. **FixPoint (Proxy)** listens on **Port 4000**. It acts as a bridge, connecting to Delve on Port 36281.
+3. **VS Code (IDE)** connects to **Port 4000**. It thinks it is talking directly to the debugger, but it is actually talking to FixPoint.
+
+```mermaid
+flowchart LR
+    A[VS Code IDE] -- "Thinks it's the Debugger\nConnects to :4000" --> B((FixPoint Proxy))
+    B -- "Forwards Traffic\nConnects to :36281" --> C[Delve Debugger]
+    C -- "Runs the Code" --> D[Your Go Application]
+    
+    style A fill:#007ACC,stroke:#333,stroke-width:2px,color:#fff
+    style B fill:#FF9900,stroke:#333,stroke-width:4px,color:#fff
+    style C fill:#00ADD8,stroke:#333,stroke-width:2px,color:#fff
+```
+
+---
+
+## 2. System Components
 
 ### A. The IDE (e.g., VS Code)
-The user's code editor, which sends debugging commands (like `step over`, `continue`, `evaluate`) and expects debugger responses.
+The user's code editor. When you click "Start Debugging", it sends commands (like `step over`, `continue`) to Port 4000, expecting standard Debugger responses.
 
 ### B. FixPoint (The Proxy)
 The core application. It has several sub-components:
-- **Proxy Server (`proxy.go`)**: Manages TCP connections. It accepts connections from the IDE and dials the target Debugger.
-- **DAP Stream Processor (`proxy.go`)**: Reads, parses, and forwards DAP messages in both directions (IDE -> Debugger and Debugger -> IDE).
-- **Interrogator (`interrogator.go`)**: Injects its own DAP requests into the stream to fetch variables, stack traces, and scopes when the program stops.
-- **Source Reader (`source.go`)**: Reads the user's local source code files to extract the exact code snippet where the execution stopped.
-- **AI Module (`ai.go`)**: Communicates with external LLM APIs (Gemini, OpenAI, OpenRouter) to analyze the captured context.
+- **Proxy Server (`proxy.go`)**: Manages the TCP connections between VS Code and Delve.
+- **DAP Stream Processor (`proxy.go`)**: Reads, parses, and forwards DAP messages back and forth in real-time.
+- **Interrogator (`interrogator.go`)**: When a crash occurs, this component injects its own hidden requests to Delve to fetch variables, stack traces, and scopes.
+- **Source Reader (`source.go`)**: Reads your local files to extract the exact code snippet where the crash happened.
+- **AI Module (`ai.go`)**: Sends the crash context to LLMs (Gemini, OpenAI) for analysis.
 
 ### C. The Debugger (e.g., Delve)
-The actual DAP backend running the user's application. It executes the code, manages breakpoints, and reports back when the program stops (e.g., due to a panic or breakpoint).
+The actual DAP backend. It executes your Go code, hits breakpoints, and triggers `StoppedEvents` when a panic occurs.
 
 ---
 
-## 2. End-to-End Execution Flow
+## 3. End-to-End Execution Flow
 
-### Initialization Phase
-1. **Start**: The user runs `fixpoint`. The application (`main.go`) starts listening on a designated proxy port (default `4000`).
-2. **Debugger Setup**: `fixpoint` either automatically spawns a headless Delve debugger instance or connects to an existing one specified by the user.
-3. **IDE Connection**: The user starts debugging in their IDE, which is configured to attach to `localhost:4000`.
-4. **Session Establised**: The `Proxy` accepts the IDE connection, establishes a connection to the Debugger, and spawns two goroutines to forward traffic bidirectionally.
-
-### The Normal Run Phase
-- As the user clicks "Step Over" or "Continue" in their IDE, the DAP requests flow: `IDE -> Proxy -> Debugger`.
-- The responses flow back: `Debugger -> Proxy -> IDE`.
-- To the IDE, it looks exactly as if it is connected directly to the Debugger.
-
-### The Interception Phase (When a Crash or Breakpoint Occurs)
-1. **Stopped Event**: The Debugger hits a breakpoint, encounters a panic, or catches an exception. It sends a `StoppedEvent` DAP message.
-2. **Detection**: The `DAP Stream Processor` (`Debugger->IDE` direction) sees the `StoppedEvent`. It forwards the event to the IDE normally so the UI updates, but it also triggers the `Interrogator`.
-3. **Context Capture (`Interrogator`)**:
-   - The Interrogator needs to know *why* the program stopped and *what* the state is. 
-   - It injects custom DAP requests (`StackTraceRequest`, `ScopesRequest`, `VariablesRequest`) directly into the `Proxy -> Debugger` stream.
-   - It assigns these custom requests very high sequence numbers (starting from `999`) so they don't collide with the sequence numbers of requests coming from the IDE.
-   - The Interrogator captures the responses, extracting local variables, the call stack, and the exact thread/frame IDs.
-4. **Source Code Extraction**: The Interrogator uses the `SourceReader` to open the local file where the error occurred and extracts the surrounding function's source code.
-5. **AI Analysis**:
-   - If it was an error/panic, FixPoint immediately constructs a prompt containing the error message, local variables, stack trace, and source code.
-   - It sends this prompt to the configured AI API.
-   - If it was just a regular breakpoint, FixPoint pauses and prompts the user in the terminal: *"Press [Enter] for AI analysis"*. If the user presses enter, it queries the AI.
-6. **Result Display**: The AI's analysis and suggested code fixes are rendered and printed beautifully to the FixPoint terminal output using `ui.go`.
-
----
-
-## 3. High Level Architecture Diagram
+### Phase 1: Normal Debugging
+As you click "Step Over" or "Continue" in VS Code, the requests flow seamlessly through FixPoint. FixPoint is completely invisible during this phase.
 
 ```mermaid
 sequenceDiagram
-    participant IDE as IDE (VS Code)
-    participant FP as FixPoint (Proxy)
-    participant AI as AI (Gemini/OpenAI)
-    participant DAP as Debugger (Delve)
+    participant IDE as VS Code (IDE)
+    participant FP as FixPoint (:4000)
+    participant DAP as Delve (:36281)
 
-    Note over IDE, DAP: Initialization
-    IDE->>FP: Connect to port 4000
-    FP->>DAP: Connect to port 36281
-    
-    Note over IDE, DAP: Normal Debugging
-    IDE->>FP: DAP Request (e.g. Next, Continue)
-    FP->>DAP: Forward Request
-    DAP->>FP: DAP Response
-    FP->>IDE: Forward Response
+    IDE->>FP: 1. Send "Continue" Request
+    FP->>DAP: 2. Forward "Continue" to Debugger
+    DAP->>FP: 3. Return Success Response
+    FP->>IDE: 4. Forward Success to VS Code
+```
 
-    Note over IDE, DAP: Interception & Analysis
-    DAP->>FP: StoppedEvent (Panic/Breakpoint)
-    FP->>IDE: Forward StoppedEvent (IDE Pauses)
+### Phase 2: Crash Interception & AI Analysis
+When your code hits a panic, exception, or breakpoint, Delve alerts FixPoint. FixPoint passes the pause command to the IDE, but then secretly interrogates Delve for variables and stack traces, asks the AI for a fix, and displays it in your terminal.
+
+```mermaid
+sequenceDiagram
+    participant IDE as VS Code (IDE)
+    participant FP as FixPoint (:4000)
+    participant DAP as Delve (:36281)
+    participant AI as AI API (Gemini/OpenAI)
+
+    Note over DAP: Your code panics!
+    DAP->>FP: 1. Send `StoppedEvent` (Panic)
+    FP->>IDE: 2. Forward `StoppedEvent` (VS Code Pauses)
     
-    Note right of FP: Interrogator activates
-    FP->>DAP: StackTraceRequest (seq 999)
+    Note over FP, DAP: 3. FixPoint Interrogator Activates
+    FP->>DAP: StackTraceRequest (Hidden from IDE)
     DAP->>FP: StackTraceResponse
-    FP->>DAP: ScopesRequest & VariablesRequest
+    FP->>DAP: VariablesRequest (Hidden from IDE)
     DAP->>FP: VariablesResponse
     
-    Note right of FP: SourceReader gets local code
+    Note over FP: 4. Extracts local Source Code snippet
     
-    alt is Error/Panic OR User pressed Enter
-        FP->>AI: Send Prompt (Context + Code + Variables)
-        AI->>FP: Return Fix & Explanation
-        Note right of FP: UI renders AI suggestion in terminal
-    end
+    FP->>AI: 5. Send Code + Variables + Crash Message
+    AI->>FP: 6. Return Fix & Explanation
+    
+    Note over FP: 7. Prints beautiful UI in your terminal!
 ```
 
 ## Summary of Key Design Decisions
-- **Non-blocking Proxy:** FixPoint does not block the IDE from receiving the `StoppedEvent`. It allows the IDE to pause and display the error normally, while FixPoint performs its heavy-lifting (fetching context and calling AI) asynchronously in the background.
-- **DAP Agnosticism:** By operating at the DAP layer, FixPoint is inherently language-agnostic. While currently focused on Go, the core proxy logic works for Python (debugpy), Node.js, or any other DAP-compliant debugger.
-- **Custom Sequence Injection:** To request variables without breaking the IDE's internal state, FixPoint tracks its own DAP sequence numbers and intercepts matching responses before they are accidentally forwarded to the IDE.
+- **Non-blocking Proxy:** FixPoint does not block the IDE from receiving the crash event. It allows the IDE to pause normally, while FixPoint performs its heavy-lifting (fetching context and calling AI) asynchronously in the background.
+- **Hidden Interrogation:** To request variables without breaking the IDE's internal state, FixPoint uses very high sequence IDs (starting from `999`) for its internal requests to Delve. It then catches Delve's responses and hides them from VS Code.
+- **DAP Agnosticism:** Because FixPoint operates entirely on the Debug Adapter Protocol layer, the proxy logic works for any language that supports DAP (like Python's debugpy or Node.js).

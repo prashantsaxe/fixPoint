@@ -88,6 +88,9 @@ You can customize these ports:
 
 # Use OpenAI
 ./fixpoint -key "gpt-4o" -openai-key "your-key-here"
+
+# Enable verbose logging (raw DAP protocol messages)
+./fixpoint -verbose
 ```
 
 ## 🔄 How It Works

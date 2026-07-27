@@ -28,7 +28,9 @@ func StartDelveBackend() (port int, cmd *exec.Cmd, err error) {
 		return 0, nil, fmt.Errorf("start dlv: %w", err)
 	}
 
-	log.Printf("waiting for dlv dap to initialize on %s...", listenAddr)
+	if VerboseLogging {
+		log.Printf("waiting for dlv dap to initialize on %s...", listenAddr)
+	}
 	time.Sleep(2 * time.Second)
 
 	done := make(chan error, 1)

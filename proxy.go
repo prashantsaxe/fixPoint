@@ -36,12 +36,18 @@ func (p *Proxy) ListenAndServe() error {
 	}
 	defer listener.Close()
 
-	log.Printf("FixPoint proxy listening on %s; forwarding to %s", p.listenAddr, p.debuggerAddr)
+	if VerboseLogging {
+		log.Printf("FixPoint proxy listening on %s; forwarding to %s", p.listenAddr, p.debuggerAddr)
+	} else {
+		fmt.Println(RenderInfo(fmt.Sprintf("FixPoint listening on %s", p.listenAddr)))
+	}
 
 	for {
 		ideConn, err := listener.Accept()
 		if err != nil {
-			log.Printf("accept error: %v", err)
+			if VerboseLogging {
+				log.Printf("accept error: %v", err)
+			}
 			continue
 		}
 		go p.handleSession(ideConn)
@@ -84,8 +90,12 @@ func (p *Proxy) handleSession(ideConn net.Conn) {
 
 	go s.readStdin()
 
-	log.Printf("Session established with IDE")
-	log.Printf("session started: IDE=%s <-> Debugger=%s", ideConn.RemoteAddr(), p.debuggerAddr)
+	if VerboseLogging {
+		log.Printf("Session established with IDE")
+		log.Printf("session started: IDE=%s <-> Debugger=%s", ideConn.RemoteAddr(), p.debuggerAddr)
+	} else {
+		fmt.Println(RenderInfo("FixPoint attached to IDE."))
+	}
 
 	var once sync.Once
 	closeBoth := func() {
@@ -102,7 +112,9 @@ func (p *Proxy) handleSession(ideConn net.Conn) {
 	go func() {
 		defer wg.Done()
 		if err := s.processDAPStream(s.debuggerConn, s.ideConn, "IDE->Debugger", s.writeToDebugger, false); err != nil && !errors.Is(err, net.ErrClosed) {
-			log.Printf("forward error IDE->Debugger (%s): %v", s.ideConn.RemoteAddr(), err)
+			if VerboseLogging {
+				log.Printf("forward error IDE->Debugger (%s): %v", s.ideConn.RemoteAddr(), err)
+			}
 		}
 		closeBoth()
 	}()
@@ -110,13 +122,19 @@ func (p *Proxy) handleSession(ideConn net.Conn) {
 	go func() {
 		defer wg.Done()
 		if err := s.processDAPStream(s.ideConn, s.debuggerConn, "Debugger->IDE", s.writeToIDE, true); err != nil && !errors.Is(err, net.ErrClosed) {
-			log.Printf("forward error Debugger->IDE (%s): %v", s.ideConn.RemoteAddr(), err)
+			if VerboseLogging {
+				log.Printf("forward error Debugger->IDE (%s): %v", s.ideConn.RemoteAddr(), err)
+			}
 		}
 		closeBoth()
 	}()
 
 	wg.Wait()
-	log.Printf("session ended: IDE=%s", s.ideConn.RemoteAddr())
+	if VerboseLogging {
+		log.Printf("session ended: IDE=%s", s.ideConn.RemoteAddr())
+	} else {
+		fmt.Println(RenderInfo("FixPoint detached from IDE."))
+	}
 }
 
 func (s *session) readStdin() {
@@ -137,19 +155,23 @@ func (s *session) processDAPStream(dst net.Conn, src net.Conn, direction string,
 	for {
 		msg, err := dap.ReadProtocolMessage(reader)
 		if err != nil {
-			log.Printf("DAP read error (%s): %v", direction, err)
+			if VerboseLogging {
+				log.Printf("DAP read error (%s): %v", direction, err)
+			}
 			return err
 		}
 
-		log.Printf("[%s] Incoming: %T", direction, msg)
+		if VerboseLogging {
+			log.Printf("[%s] Incoming: %T", direction, msg)
 
-		switch m := msg.(type) {
-		case *dap.LaunchRequest:
-			if args, err := json.Marshal(m.Arguments); err == nil {
-				log.Printf("[%s] LaunchRequest arguments: %s", direction, string(args))
+			switch m := msg.(type) {
+			case *dap.LaunchRequest:
+				if args, err := json.Marshal(m.Arguments); err == nil {
+					log.Printf("[%s] LaunchRequest arguments: %s", direction, string(args))
+				}
+			case *dap.ErrorResponse:
+				log.Printf("[%s] ErrorResponse: success=%v message=%q body.Error.Format=%q", direction, m.Success, m.Message, m.Body.Error.Format)
 			}
-		case *dap.ErrorResponse:
-			log.Printf("[%s] ErrorResponse: success=%v message=%q body.Error.Format=%q", direction, m.Success, m.Message, m.Body.Error.Format)
 		}
 
 		if !inspectStopped {

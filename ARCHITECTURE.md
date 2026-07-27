@@ -34,6 +34,8 @@ The user's code editor. When you click "Start Debugging", it sends commands (lik
 
 ### B. FixPoint (The Proxy)
 The core application. It has several sub-components:
+- **CLI & Entry Point (`cmd/fixpoint/main.go`)**: Provides the `fixpoint` command line interface, interactive setup, and orchestrates the application startup.
+- **Config Manager (`config/config.go`)**: Manages the global JSON configuration (`~/.config/fixpoint/config.json`) so users don't need `.env` files per project.
 - **Proxy Server (`proxy.go`)**: Manages the TCP connections between VS Code and Delve.
 - **DAP Stream Processor (`proxy.go`)**: Reads, parses, and forwards DAP messages back and forth in real-time.
 - **Interrogator (`interrogator.go`)**: When a crash occurs, this component injects its own hidden requests to Delve to fetch variables, stack traces, and scopes.

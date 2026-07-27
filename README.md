@@ -22,26 +22,31 @@
 ### Installation
 
 ```bash
-# Clone the repository
+# Install directly via Go
+go install github.com/yourusername/fixpoint/cmd/fixpoint@latest
+
+# OR clone and build manually
 git clone https://github.com/yourusername/fixpoint.git
 cd fixpoint
-
-# Build the binary
-go build -o fixpoint .
+go build -o fixpoint ./cmd/fixpoint
 ```
 
 ### Usage
 
-FixPoint runs as a **proxy** between your IDE (like VS Code) and your debugger (like Go's delve).
+FixPoint runs as a **man-in-the-middle proxy** between your IDE (like VS Code) and your actual debugger (like Go's Delve).
 
-1.  **Start the Proxy**:
-    Run the binary and provide your API key.
-
+1.  **Configure Your API Key**:
+    FixPoint uses a global configuration file, so you only need to set this up once. Run the interactive setup:
     ```bash
-    ./fixpoint -key <your-api-key>
-    # Or if you want to use a specific key for Gemini
-    ./fixpoint -gemini-key <gemini-key>
+    fixpoint config
     ```
+    *This will prompt you for your OpenRouter API key and preferred AI model.*
+
+2.  **Start the FixPoint Proxy**:
+    ```bash
+    fixpoint
+    ```
+    *The proxy will start and listen on port `4000` by default.*
 
 2.  **Configure Your IDE**:
     - Open your `.vscode/launch.json` (or equivalent).
@@ -49,7 +54,7 @@ FixPoint runs as a **proxy** between your IDE (like VS Code) and your debugger (
     - Set `request` to `attach`.
     - Crucially, set `port` to `4000` (the default proxy port) and `address` to `localhost`.
 
-    **Example `.vscode/launch.json` for Go:**
+    **Example `.vscode/launch.json` for Go (VS Code):**
 
     ```json
     {
@@ -57,12 +62,11 @@ FixPoint runs as a **proxy** between your IDE (like VS Code) and your debugger (
       "configurations": [
         {
           "name": "Attach to FixPoint",
-          "type": "pwa",
+          "type": "go",
           "request": "attach",
           "mode": "remote",
           "port": 4000,
-          "address": "localhost",
-          "webRoot": "${workspaceFolder}"
+          "host": "127.0.0.1"
         }
       ]
     }
@@ -77,20 +81,14 @@ FixPoint runs as a **proxy** between your IDE (like VS Code) and your debugger (
 
 The proxy listens on port `4000` by default, forwarding traffic to `36281`.
 
-You can customize these ports:
+You can customize these ports (useful if 4000 is taken):
 
 ```bash
 # Listen on 5000, forward to 36281
-./fixpoint -listen :5000 -debugger :36281
-
-# Use a specific Gemini key
-./fixpoint -key "gemini-1.5-pro" -gemini-key "your-key-here"
-
-# Use OpenAI
-./fixpoint -key "gpt-4o" -openai-key "your-key-here"
+fixpoint -listen :5000 -debugger :36281
 
 # Enable verbose logging (raw DAP protocol messages)
-./fixpoint -verbose
+fixpoint -verbose
 ```
 
 ## 🔄 How It Works
@@ -112,7 +110,9 @@ You can customize these ports:
 
 If you want to contribute or modify the behavior:
 
-- The main logic is in `proxy.go`.
+- The main entry point is `cmd/fixpoint/main.go`.
+- Global configuration is handled in `config/config.go`.
+- The core proxy logic is in `proxy.go`.
 - AI interaction happens in `ai.go`.
 - Context capture logic is in `interrogator.go`.
 

@@ -1,4 +1,4 @@
-package main
+package fixpoint
 
 import (
 	"bufio"
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"fixpoint/config"
 	dap "github.com/google/go-dap"
 )
 
@@ -23,10 +24,13 @@ const (
 type Proxy struct {
 	listenAddr   string
 	debuggerAddr string
+	cfg          *config.Config
 }
 
-func NewProxy(listenAddr, debuggerAddr string) *Proxy {
-	return &Proxy{listenAddr: listenAddr, debuggerAddr: debuggerAddr}
+var VerboseLogging bool
+
+func NewProxy(listenAddr, debuggerAddr string, cfg *config.Config) *Proxy {
+	return &Proxy{listenAddr: listenAddr, debuggerAddr: debuggerAddr, cfg: cfg}
 }
 
 func (p *Proxy) ListenAndServe() error {
@@ -248,8 +252,8 @@ func (s *session) handleStoppedEvent(msg dap.Message) {
 			fmt.Println(sourceWindow)
 		}
 
-		if os.Getenv("OPENROUTER_API_KEY") == "" {
-			fmt.Println(RenderWarning("OPENROUTER_API_KEY not set; skipping AI analysis"))
+		if s.proxy.cfg == nil || s.proxy.cfg.OpenRouterAPIKey == "" {
+			fmt.Println(RenderWarning("OPENROUTER_API_KEY not set in config; skipping AI analysis"))
 			return
 		}
 
@@ -257,7 +261,7 @@ func (s *session) handleStoppedEvent(msg dap.Message) {
 			spinner := NewSpinner()
 			spinner.Start()
 
-			analysis, err := GetFixFromAI(ctx)
+			analysis, err := GetFixFromAI(ctx, s.proxy.cfg)
 
 			spinner.Stop()
 

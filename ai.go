@@ -1,4 +1,4 @@
-package main
+package fixpoint
 
 import (
 	"bytes"
@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
+
+	"fixpoint/config"
 )
+
+
 
 const fixPointSystemPrompt = `You are FixPoint, an expert software engineer and debugger. You are given a stack trace, local variables, and a code snippet from a breakpoint. Provide a detailed diagnosis of why execution stopped, identify the likely root cause, and propose a concrete code fix with rationale.
 
@@ -21,9 +24,9 @@ Respond using these sections:
 4) Proposed Fix — a clear, actionable code change with explanation.
 5) Validation Steps — how to verify the fix works.`
 
-func GetFixFromAI(ctx *DebugContext) (string, error) {
-	apiKey := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
-	model := getOpenRouterModel()
+func GetFixFromAI(ctx *DebugContext, cfg *config.Config) (string, error) {
+	apiKey := strings.TrimSpace(cfg.OpenRouterAPIKey)
+	model := strings.TrimSpace(cfg.Model)
 
 	if apiKey == "" {
 		return "", fmt.Errorf("missing OPENROUTER_API_KEY")
@@ -113,13 +116,6 @@ func GetFixFromAI(ctx *DebugContext) (string, error) {
 	return content, nil
 }
 
-func getOpenRouterModel() string {
-	model := strings.TrimSpace(os.Getenv("OPENROUTER_MODEL"))
-	if model == "" {
-		return "google/gemini-2.5-flash"
-	}
-	return model
-}
 
 func buildUserPrompt(ctx *DebugContext) string {
 	var b strings.Builder

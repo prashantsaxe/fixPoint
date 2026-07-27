@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 )
 
+var VerboseLogging bool
+
 type Config struct {
 	OpenRouterAPIKey string `json:"openrouter_api_key"`
 	Model            string `json:"model"`

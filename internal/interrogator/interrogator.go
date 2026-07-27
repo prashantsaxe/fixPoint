@@ -1,4 +1,4 @@
-package fixpoint
+package interrogator
 
 import (
 	"fmt"
@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"fixpoint/internal/models"
+	"fixpoint/internal/source"
 	dap "github.com/google/go-dap"
 )
 
@@ -15,15 +17,15 @@ type Interrogator struct {
 	pendingResponses map[int]chan dap.Message
 
 	sendRequest func(req dap.Message) error
-	source      *SourceReader
+	srcReader   *source.SourceReader
 }
 
-func NewInterrogator(sendRequest func(req dap.Message) error, source *SourceReader) *Interrogator {
+func NewInterrogator(sendRequest func(req dap.Message) error, srcReader *source.SourceReader) *Interrogator {
 	return &Interrogator{
 		nextSeq:          999,
 		pendingResponses: make(map[int]chan dap.Message),
 		sendRequest:      sendRequest,
-		source:           source,
+		srcReader:        srcReader,
 	}
 }
 
@@ -65,7 +67,7 @@ func (i *Interrogator) Close() {
 	}
 }
 
-func (i *Interrogator) CaptureContext(threadID int, reason string) (*DebugContext, error) {
+func (i *Interrogator) CaptureContext(threadID int, reason string) (*models.DebugContext, error) {
 	stackReq := &dap.StackTraceRequest{
 		Request: dap.Request{
 			ProtocolMessage: dap.ProtocolMessage{Type: "request"},
@@ -147,7 +149,7 @@ func (i *Interrogator) CaptureContext(threadID int, reason string) (*DebugContex
 		return nil, fmt.Errorf("variables response failed: %s", varsResp.Message)
 	}
 
-	context := &DebugContext{
+	context := &models.DebugContext{
 		Reason:     reason,
 		ThreadID:   threadID,
 		FrameID:    frame.Id,
@@ -158,7 +160,7 @@ func (i *Interrogator) CaptureContext(threadID int, reason string) (*DebugContex
 	}
 
 	if sourcePath != "" {
-		snippet, err := i.source.GetEnclosingFunction(sourcePath, frame.Line)
+		snippet, err := i.srcReader.GetEnclosingFunction(sourcePath, frame.Line)
 		if err != nil {
 			return context, fmt.Errorf("source window read failed: %w", err)
 		}
@@ -231,14 +233,14 @@ func findLocalsReference(scopes []dap.Scope) int {
 	return 0
 }
 
-func mapStackFrames(frames []dap.StackFrame) []StackFrameInfo {
-	out := make([]StackFrameInfo, 0, len(frames))
+func mapStackFrames(frames []dap.StackFrame) []models.StackFrameInfo {
+	out := make([]models.StackFrameInfo, 0, len(frames))
 	for _, frame := range frames {
 		sourcePath := ""
 		if frame.Source != nil {
 			sourcePath = frame.Source.Path
 		}
-		out = append(out, StackFrameInfo{
+		out = append(out, models.StackFrameInfo{
 			ID:         frame.Id,
 			Name:       frame.Name,
 			SourcePath: sourcePath,
@@ -249,10 +251,10 @@ func mapStackFrames(frames []dap.StackFrame) []StackFrameInfo {
 	return out
 }
 
-func mapVariables(vars []dap.Variable) []VariableInfo {
-	out := make([]VariableInfo, 0, len(vars))
+func mapVariables(vars []dap.Variable) []models.VariableInfo {
+	out := make([]models.VariableInfo, 0, len(vars))
 	for _, variable := range vars {
-		out = append(out, VariableInfo{
+		out = append(out, models.VariableInfo{
 			Name:  variable.Name,
 			Type:  variable.Type,
 			Value: variable.Value,

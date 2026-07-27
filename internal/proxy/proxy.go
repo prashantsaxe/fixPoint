@@ -1,4 +1,4 @@
-package fixpoint
+package proxy
 
 import (
 	"bufio"
@@ -12,7 +12,11 @@ import (
 	"strings"
 	"sync"
 
-	"fixpoint/config"
+	"fixpoint/internal/ai"
+	"fixpoint/internal/config"
+	"fixpoint/internal/interrogator"
+	"fixpoint/internal/source"
+	"fixpoint/internal/ui"
 	dap "github.com/google/go-dap"
 )
 
@@ -27,8 +31,6 @@ type Proxy struct {
 	cfg          *config.Config
 }
 
-var VerboseLogging bool
-
 func NewProxy(listenAddr, debuggerAddr string, cfg *config.Config) *Proxy {
 	return &Proxy{listenAddr: listenAddr, debuggerAddr: debuggerAddr, cfg: cfg}
 }
@@ -40,16 +42,14 @@ func (p *Proxy) ListenAndServe() error {
 	}
 	defer listener.Close()
 
-	if VerboseLogging {
+	if config.VerboseLogging {
 		log.Printf("FixPoint proxy listening on %s; forwarding to %s", p.listenAddr, p.debuggerAddr)
-	} else {
-		fmt.Println(RenderInfo(fmt.Sprintf("FixPoint listening on %s", p.listenAddr)))
 	}
 
 	for {
 		ideConn, err := listener.Accept()
 		if err != nil {
-			if VerboseLogging {
+			if config.VerboseLogging {
 				log.Printf("accept error: %v", err)
 			}
 			continue
@@ -65,7 +65,7 @@ type session struct {
 
 	debuggerWriteMu sync.Mutex
 
-	interrogator *Interrogator
+	interrog *interrogator.Interrogator
 
 	stdinCh   chan string
 	promptMu  sync.Mutex
@@ -88,17 +88,17 @@ func (p *Proxy) handleSession(ideConn net.Conn) {
 		debuggerConn: debuggerConn,
 		stdinCh:      make(chan string, 1),
 	}
-	s.interrogator = NewInterrogator(s.writeToDebugger, NewSourceReader())
+	s.interrog = interrogator.NewInterrogator(s.writeToDebugger, source.NewSourceReader())
 
 	s.promptCtx, s.promptCf = context.WithCancel(context.Background())
 
 	go s.readStdin()
 
-	if VerboseLogging {
+	if config.VerboseLogging {
 		log.Printf("Session established with IDE")
 		log.Printf("session started: IDE=%s <-> Debugger=%s", ideConn.RemoteAddr(), p.debuggerAddr)
 	} else {
-		fmt.Println(RenderInfo("FixPoint attached to IDE."))
+		fmt.Println(ui.RenderInfo("FixPoint attached to IDE."))
 	}
 
 	var once sync.Once
@@ -106,7 +106,7 @@ func (p *Proxy) handleSession(ideConn net.Conn) {
 		once.Do(func() {
 			_ = s.ideConn.Close()
 			_ = s.debuggerConn.Close()
-			s.interrogator.Close()
+			s.interrog.Close()
 		})
 	}
 
@@ -116,7 +116,7 @@ func (p *Proxy) handleSession(ideConn net.Conn) {
 	go func() {
 		defer wg.Done()
 		if err := s.processDAPStream(s.debuggerConn, s.ideConn, "IDE->Debugger", s.writeToDebugger, false); err != nil && !errors.Is(err, net.ErrClosed) {
-			if VerboseLogging {
+			if config.VerboseLogging {
 				log.Printf("forward error IDE->Debugger (%s): %v", s.ideConn.RemoteAddr(), err)
 			}
 		}
@@ -126,7 +126,7 @@ func (p *Proxy) handleSession(ideConn net.Conn) {
 	go func() {
 		defer wg.Done()
 		if err := s.processDAPStream(s.ideConn, s.debuggerConn, "Debugger->IDE", s.writeToIDE, true); err != nil && !errors.Is(err, net.ErrClosed) {
-			if VerboseLogging {
+			if config.VerboseLogging {
 				log.Printf("forward error Debugger->IDE (%s): %v", s.ideConn.RemoteAddr(), err)
 			}
 		}
@@ -134,10 +134,10 @@ func (p *Proxy) handleSession(ideConn net.Conn) {
 	}()
 
 	wg.Wait()
-	if VerboseLogging {
+	if config.VerboseLogging {
 		log.Printf("session ended: IDE=%s", s.ideConn.RemoteAddr())
 	} else {
-		fmt.Println(RenderInfo("FixPoint detached from IDE."))
+		fmt.Println(ui.RenderInfo("FixPoint detached from IDE."))
 	}
 }
 
@@ -159,13 +159,13 @@ func (s *session) processDAPStream(dst net.Conn, src net.Conn, direction string,
 	for {
 		msg, err := dap.ReadProtocolMessage(reader)
 		if err != nil {
-			if VerboseLogging {
+			if config.VerboseLogging {
 				log.Printf("DAP read error (%s): %v", direction, err)
 			}
 			return err
 		}
 
-		if VerboseLogging {
+		if config.VerboseLogging {
 			log.Printf("[%s] Incoming: %T", direction, msg)
 
 			switch m := msg.(type) {
@@ -183,7 +183,7 @@ func (s *session) processDAPStream(dst net.Conn, src net.Conn, direction string,
 		}
 
 		if inspectStopped {
-			if resp, ok := msg.(dap.ResponseMessage); ok && s.interrogator.DeliverResponse(resp) {
+			if resp, ok := msg.(dap.ResponseMessage); ok && s.interrog.DeliverResponse(resp) {
 				continue
 			}
 		}
@@ -239,45 +239,45 @@ func (s *session) handleStoppedEvent(msg dap.Message) {
 	}
 
 	body := stopped.Body
-	fmt.Println(RenderBreakpointHeader(body.Reason, body.ThreadId))
+	fmt.Println(ui.RenderBreakpointHeader(body.Reason, body.ThreadId))
 
 	threadID := body.ThreadId
 	go func() {
-		ctx, err := s.interrogator.CaptureContext(threadID, body.Reason)
+		ctx, err := s.interrog.CaptureContext(threadID, body.Reason)
 		if err != nil {
 			log.Printf("context capture failed: %v", err)
 			return
 		}
-		if sourceWindow := RenderSourceWindow(ctx); sourceWindow != "" {
+		if sourceWindow := ui.RenderSourceWindow(ctx); sourceWindow != "" {
 			fmt.Println(sourceWindow)
 		}
 
 		if s.proxy.cfg == nil || s.proxy.cfg.OpenRouterAPIKey == "" {
-			fmt.Println(RenderWarning("OPENROUTER_API_KEY not set in config; skipping AI analysis"))
+			fmt.Println(ui.RenderWarning("OPENROUTER_API_KEY not set in config; skipping AI analysis"))
 			return
 		}
 
 		runAI := func() {
-			spinner := NewSpinner()
+			spinner := ui.NewSpinner()
 			spinner.Start()
 
-			analysis, err := GetFixFromAI(ctx, s.proxy.cfg)
+			analysis, err := ai.GetFixFromAI(ctx, s.proxy.cfg)
 
 			spinner.Stop()
 
 			if err != nil {
 				log.Printf("AI analysis failed: %v", err)
-				fmt.Println(RenderWarning(fmt.Sprintf("AI analysis failed: %v", err)))
+				fmt.Println(ui.RenderWarning(fmt.Sprintf("AI analysis failed: %v", err)))
 				return
 			}
 
-			fmt.Println(RenderAIResponseCard(analysis))
+			fmt.Println(ui.RenderAIResponseCard(analysis))
 		}
 
 		if reason == "exception" || reason == "panic" || reason == "error" {
 			runAI()
 		} else if reason == "breakpoint" || reason == "step" {
-			fmt.Println(RenderInfo("Local Variables:"))
+			fmt.Println(ui.RenderInfo("Local Variables:"))
 			for _, v := range ctx.Variables {
 				fmt.Printf("  %s = %s\n", v.Name, v.Value)
 			}
@@ -287,7 +287,7 @@ func (s *session) handleStoppedEvent(msg dap.Message) {
 			s.promptCf = promptCf
 			s.promptMu.Unlock()
 
-			fmt.Print(RenderPrompt("\n[FixPoint] Press [Enter] for AI analysis, or type 'c' to skip: "))
+			fmt.Print(ui.RenderPrompt("\n[FixPoint] Press [Enter] for AI analysis, or type 'c' to skip: "))
 
 			select {
 			case <-s.stdinCh:
@@ -299,10 +299,10 @@ func (s *session) handleStoppedEvent(msg dap.Message) {
 				if input == "" || input == "a" {
 					runAI()
 				} else {
-					fmt.Println(RenderInfo("Skipping AI analysis."))
+					fmt.Println(ui.RenderInfo("Skipping AI analysis."))
 				}
 			case <-promptCtx.Done():
-				fmt.Println(RenderInfo("Prompt cancelled (debugger resumed)."))
+				fmt.Println(ui.RenderInfo("Prompt cancelled (debugger resumed)."))
 			}
 		}
 	}()

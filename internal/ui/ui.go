@@ -1,9 +1,10 @@
-package fixpoint
+package ui
 
 import (
 	"fmt"
 	"strings"
 
+	"fixpoint/internal/models"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -74,7 +75,7 @@ func RenderBreakpointHeader(reason string, threadID int) string {
 	return breakpointHeaderStyle.Render(fmt.Sprintf("  %s  threadId=%d", symbol, threadID))
 }
 
-func RenderSourceWindow(ctx *DebugContext) string {
+func RenderSourceWindow(ctx *models.DebugContext) string {
 	if ctx == nil || len(ctx.SourceSnippet) == 0 {
 		return ""
 	}

@@ -12,8 +12,10 @@ import (
 	"strings"
 	"syscall"
 
-	"fixpoint"
-	"fixpoint/config"
+	"fixpoint/internal/config"
+	"fixpoint/internal/delve"
+	"fixpoint/internal/proxy"
+	"fixpoint/internal/ui"
 
 	"github.com/joho/godotenv"
 )
@@ -51,7 +53,7 @@ func main() {
 		fs.Parse(os.Args[1:])
 	}
 
-	fixpoint.VerboseLogging = *verbose
+	config.VerboseLogging = *verbose
 
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -59,7 +61,7 @@ func main() {
 	}
 
 	if cfg.OpenRouterAPIKey == "" {
-		fmt.Println(fixpoint.RenderInfo("No API key found in config. Let's set it up!"))
+		fmt.Println(ui.RenderInfo("No API key found in config. Let's set it up!"))
 		runConfigSetup()
 		
 		cfg, err = config.LoadConfig()
@@ -71,40 +73,47 @@ func main() {
 	var delveCmd *exec.Cmd
 
 	if *debuggerAddr == "" {
-		delvePort, cmd, err := fixpoint.StartDelveBackend()
+		delvePort, cmd, err := delve.StartDelveBackend()
 		if err != nil {
 			log.Fatalf("failed to start delve backend: %v", err)
 		}
 		delveCmd = cmd
 		addr := fmt.Sprintf("127.0.0.1:%d", delvePort)
 		debuggerAddr = &addr
-		if fixpoint.VerboseLogging {
-			log.Printf("Delve DAP backend spawned on %s", *debuggerAddr)
-		}
-	} else {
-		if fixpoint.VerboseLogging {
-			log.Printf("connecting to external debugger at %s", *debuggerAddr)
-		}
 	}
 
-	proxy := fixpoint.NewProxy(*listenAddr, *debuggerAddr, cfg)
+	p := proxy.NewProxy(*listenAddr, *debuggerAddr, cfg)
+
+	if !config.VerboseLogging {
+		fmt.Printf("FixPoint Proxy active on %s\n", *listenAddr)
+		if delveCmd != nil {
+			fmt.Printf("Auto-spawned Delve backend on %s\n", *debuggerAddr)
+		}
+		fmt.Println("Waiting for IDE connection (Press F5 in VS Code)...")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	go func() {
 		<-ctx.Done()
-		fmt.Println(fixpoint.RenderInfo("\nShutting down FixPoint..."))
+		fmt.Println(ui.RenderInfo("\nShutting down FixPoint..."))
 		if delveCmd != nil && delveCmd.Process != nil {
 			delveCmd.Process.Kill()
 		}
 		os.Exit(0)
 	}()
 
-	if err := proxy.ListenAndServe(); err != nil {
+	err = p.ListenAndServe()
+	// Ensure delve is killed if proxy loop exits for any reason
+	if delveCmd != nil && delveCmd.Process != nil {
+		delveCmd.Process.Kill()
+	}
+	if err != nil {
 		log.Fatalf("proxy failed: %v", err)
 	}
 }
+
 
 func runConfigSetup() {
 	reader := bufio.NewReader(os.Stdin)
@@ -130,5 +139,5 @@ func runConfigSetup() {
 		os.Exit(1)
 	}
 
-	fmt.Println(fixpoint.RenderInfo("Configuration saved successfully!"))
+	fmt.Println(ui.RenderInfo("Configuration saved successfully!"))
 }

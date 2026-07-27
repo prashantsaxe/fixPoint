@@ -1,4 +1,4 @@
-package fixpoint
+package source
 
 import (
 	"bufio"
@@ -7,6 +7,8 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+
+	"fixpoint/internal/models"
 )
 
 type SourceReader struct{}
@@ -15,7 +17,7 @@ func NewSourceReader() *SourceReader {
 	return &SourceReader{}
 }
 
-func (s *SourceReader) GetEnclosingFunction(path string, targetLine int) ([]SourceLine, error) {
+func (s *SourceReader) GetEnclosingFunction(path string, targetLine int) ([]models.SourceLine, error) {
 	if path == "" {
 		return nil, fmt.Errorf("source path is empty")
 	}
@@ -59,7 +61,7 @@ func (s *SourceReader) GetEnclosingFunction(path string, targetLine int) ([]Sour
 	return s.readLines(path, startLine, endLine)
 }
 
-func (s *SourceReader) getFallbackWindow(path string, targetLine int) ([]SourceLine, error) {
+func (s *SourceReader) getFallbackWindow(path string, targetLine int) ([]models.SourceLine, error) {
 	startLine := targetLine - 10
 	if startLine < 1 {
 		startLine = 1
@@ -68,19 +70,19 @@ func (s *SourceReader) getFallbackWindow(path string, targetLine int) ([]SourceL
 	return s.readLines(path, startLine, endLine)
 }
 
-func (s *SourceReader) readLines(path string, startLine, endLine int) ([]SourceLine, error) {
+func (s *SourceReader) readLines(path string, startLine, endLine int) ([]models.SourceLine, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	var out []SourceLine
+	var out []models.SourceLine
 	scanner := bufio.NewScanner(f)
 	currentLine := 1
 	for scanner.Scan() {
 		if currentLine >= startLine && currentLine <= endLine {
-			out = append(out, SourceLine{LineNumber: currentLine, Text: scanner.Text()})
+			out = append(out, models.SourceLine{LineNumber: currentLine, Text: scanner.Text()})
 		}
 		if currentLine > endLine {
 			break

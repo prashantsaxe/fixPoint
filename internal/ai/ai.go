@@ -1,4 +1,4 @@
-package fixpoint
+package ai
 
 import (
 	"bytes"
@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"fixpoint/config"
+	"fixpoint/internal/config"
+	"fixpoint/internal/models"
+	"fixpoint/internal/ui"
 )
-
-
 
 const fixPointSystemPrompt = `You are FixPoint, an expert software engineer and debugger. You are given a stack trace, local variables, and a code snippet from a breakpoint. Provide a detailed diagnosis of why execution stopped, identify the likely root cause, and propose a concrete code fix with rationale.
 
@@ -24,7 +24,7 @@ Respond using these sections:
 4) Proposed Fix — a clear, actionable code change with explanation.
 5) Validation Steps — how to verify the fix works.`
 
-func GetFixFromAI(ctx *DebugContext, cfg *config.Config) (string, error) {
+func GetFixFromAI(ctx *models.DebugContext, cfg *config.Config) (string, error) {
 	apiKey := strings.TrimSpace(cfg.OpenRouterAPIKey)
 	model := strings.TrimSpace(cfg.Model)
 
@@ -40,8 +40,8 @@ func GetFixFromAI(ctx *DebugContext, cfg *config.Config) (string, error) {
 	}
 
 	requestBody := map[string]any{
-		"model":    model,
-		"messages": messages,
+		"model":       model,
+		"messages":    messages,
 		"temperature": 0.2,
 		"max_tokens":  1600,
 	}
@@ -53,7 +53,7 @@ func GetFixFromAI(ctx *DebugContext, cfg *config.Config) (string, error) {
 
 	payloadSizeKB := float64(len(payload)) / 1024.0
 	infoMsg := fmt.Sprintf("Sending AI request (Payload: %.2f KB, Model: %s)...", payloadSizeKB, model)
-	fmt.Println(RenderInfo(infoMsg))
+	fmt.Println(ui.RenderInfo(infoMsg))
 
 	reqCtx, cancel := stdctx.WithTimeout(stdctx.Background(), 90*time.Second)
 	defer cancel()
@@ -116,8 +116,7 @@ func GetFixFromAI(ctx *DebugContext, cfg *config.Config) (string, error) {
 	return content, nil
 }
 
-
-func buildUserPrompt(ctx *DebugContext) string {
+func buildUserPrompt(ctx *models.DebugContext) string {
 	var b strings.Builder
 
 	b.WriteString("Debug Context Report\n")

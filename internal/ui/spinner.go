@@ -1,4 +1,4 @@
-package fixpoint
+package ui
 
 import (
 	"fmt"

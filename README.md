@@ -50,9 +50,10 @@ FixPoint runs as a **man-in-the-middle proxy** between your IDE (like VS Code) a
 
 2.  **Configure Your IDE**:
     - Open your `.vscode/launch.json` (or equivalent).
-    - Change your `type` to `pwa` (or `node` for Node.js).
-    - Set `request` to `attach`.
-    - Crucially, set `port` to `4000` (the default proxy port) and `address` to `localhost`.
+    - Set `type` to `go` (or your target language).
+    - Set `request` to `launch`.
+    - Set `port` to `4000` (the default proxy port) and `host` to `127.0.0.1`.
+    - Set `debugAdapter` to `dlv-dap`.
 
     **Example `.vscode/launch.json` for Go (VS Code):**
 
@@ -61,21 +62,23 @@ FixPoint runs as a **man-in-the-middle proxy** between your IDE (like VS Code) a
       "version": "0.2.0",
       "configurations": [
         {
-          "name": "Attach to FixPoint",
+          "name": "Launch via FixPoint",
           "type": "go",
-          "request": "attach",
-          "mode": "remote",
+          "request": "launch",
+          "mode": "debug",
+          "program": "${workspaceFolder}",
           "port": 4000,
-          "host": "127.0.0.1"
+          "host": "127.0.0.1",
+          "debugAdapter": "dlv-dap"
         }
       ]
     }
     ```
 
 3.  **Start Debugging**:
-    - Run your Go program with `dlv debug --listen=:36281 --headless=true --api-version=2 --accept-multiclient`.
-    - Start the "Attach to FixPoint" configuration in VS Code.
-    - Hit a breakpoint or exception. FixPoint will automatically capture the context and ask if you want AI analysis.
+    - Just hit **F5** (or start the "Launch via FixPoint" configuration) in VS Code.
+    - FixPoint automatically spawns Delve in the background and runs your code!
+    - When you hit a breakpoint or exception, FixPoint will automatically capture the context and ask if you want AI analysis.
 
 ## 🔧 Configuration
 
@@ -108,13 +111,15 @@ fixpoint -verbose
 
 ## 🛠️ Developing
 
-If you want to contribute or modify the behavior:
+If you want to contribute or modify the behavior, FixPoint uses the standard Go project layout:
 
-- The main entry point is `cmd/fixpoint/main.go`.
-- Global configuration is handled in `config/config.go`.
-- The core proxy logic is in `proxy.go`.
-- AI interaction happens in `ai.go`.
-- Context capture logic is in `interrogator.go`.
+- **`/cmd/fixpoint/main.go`**: The main entry point.
+- **`/internal/config/config.go`**: Global configuration.
+- **`/internal/proxy/proxy.go`**: The core TCP proxy logic.
+- **`/internal/ai/ai.go`**: LLM interaction and prompt building.
+- **`/internal/interrogator/interrogator.go`**: Context capture logic.
+- **`/internal/delve/delve.go`**: Delve DAP process lifecycle management.
+
 
 ## 📄 License
 

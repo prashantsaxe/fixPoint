@@ -1,4 +1,4 @@
-package fixpoint
+package utils
 
 import (
 	"bufio"
@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-func loadAPIKeyFromDotEnv(path string) (string, error) {
+func LoadAPIKeyFromDotEnv(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err

@@ -4,3 +4,4 @@ __debug_bin*
 *.exe~
 launch.json
 .vscode/launch.json
+test-server/

@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -21,11 +23,10 @@ const (
 type Proxy struct {
 	listenAddr   string
 	debuggerAddr string
-	apiKey       string
 }
 
-func NewProxy(listenAddr, debuggerAddr, apiKey string) *Proxy {
-	return &Proxy{listenAddr: listenAddr, debuggerAddr: debuggerAddr, apiKey: apiKey}
+func NewProxy(listenAddr, debuggerAddr string) *Proxy {
+	return &Proxy{listenAddr: listenAddr, debuggerAddr: debuggerAddr}
 }
 
 func (p *Proxy) ListenAndServe() error {
@@ -55,6 +56,11 @@ type session struct {
 	debuggerWriteMu sync.Mutex
 
 	interrogator *Interrogator
+
+	stdinCh   chan string
+	promptMu  sync.Mutex
+	promptCtx context.Context
+	promptCf  context.CancelFunc
 }
 
 func (p *Proxy) handleSession(ideConn net.Conn) {
@@ -70,11 +76,15 @@ func (p *Proxy) handleSession(ideConn net.Conn) {
 		proxy:        p,
 		ideConn:      ideConn,
 		debuggerConn: debuggerConn,
+		stdinCh:      make(chan string, 1),
 	}
 	s.interrogator = NewInterrogator(s.writeToDebugger, NewSourceReader())
 
-	log.Printf("Session established with IDE")
+	s.promptCtx, s.promptCf = context.WithCancel(context.Background())
 
+	go s.readStdin()
+
+	log.Printf("Session established with IDE")
 	log.Printf("session started: IDE=%s <-> Debugger=%s", ideConn.RemoteAddr(), p.debuggerAddr)
 
 	var once sync.Once
@@ -109,6 +119,17 @@ func (p *Proxy) handleSession(ideConn net.Conn) {
 	log.Printf("session ended: IDE=%s", s.ideConn.RemoteAddr())
 }
 
+func (s *session) readStdin() {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		s.stdinCh <- strings.TrimSpace(line)
+	}
+}
+
 func (s *session) processDAPStream(dst net.Conn, src net.Conn, direction string, writeFn func(dap.Message) error, inspectStopped bool) error {
 	_ = dst
 	reader := bufio.NewReader(src)
@@ -121,6 +142,19 @@ func (s *session) processDAPStream(dst net.Conn, src net.Conn, direction string,
 		}
 
 		log.Printf("[%s] Incoming: %T", direction, msg)
+
+		switch m := msg.(type) {
+		case *dap.LaunchRequest:
+			if args, err := json.Marshal(m.Arguments); err == nil {
+				log.Printf("[%s] LaunchRequest arguments: %s", direction, string(args))
+			}
+		case *dap.ErrorResponse:
+			log.Printf("[%s] ErrorResponse: success=%v message=%q body.Error.Format=%q", direction, m.Success, m.Message, m.Body.Error.Format)
+		}
+
+		if !inspectStopped {
+			s.handleIDEResume(msg)
+		}
 
 		if inspectStopped {
 			if resp, ok := msg.(dap.ResponseMessage); ok && s.interrogator.DeliverResponse(resp) {
@@ -135,6 +169,22 @@ func (s *session) processDAPStream(dst net.Conn, src net.Conn, direction string,
 		if inspectStopped {
 			s.handleStoppedEvent(msg)
 		}
+	}
+}
+
+func (s *session) handleIDEResume(msg dap.Message) {
+	switch msg.(type) {
+	case *dap.ContinueRequest, *dap.NextRequest, *dap.StepInRequest, *dap.StepOutRequest, *dap.DisconnectRequest:
+		s.cancelPrompt()
+	}
+}
+
+func (s *session) cancelPrompt() {
+	s.promptMu.Lock()
+	defer s.promptMu.Unlock()
+	if s.promptCf != nil {
+		s.promptCf()
+		s.promptCf = nil
 	}
 }
 
@@ -153,7 +203,7 @@ func (s *session) handleStoppedEvent(msg dap.Message) {
 	if !ok {
 		return
 	}
-	
+
 	reason := strings.ToLower(stopped.Body.Reason)
 	validReasons := map[string]bool{
 		"breakpoint": true, "step": true, "exception": true, "panic": true, "error": true,
@@ -176,8 +226,8 @@ func (s *session) handleStoppedEvent(msg dap.Message) {
 			fmt.Println(sourceWindow)
 		}
 
-		if strings.TrimSpace(s.proxy.apiKey) == "" {
-			fmt.Println(RenderWarning("-apikey not provided; skipping AI analysis"))
+		if os.Getenv("OPENROUTER_API_KEY") == "" {
+			fmt.Println(RenderWarning("OPENROUTER_API_KEY not set; skipping AI analysis"))
 			return
 		}
 
@@ -185,12 +235,13 @@ func (s *session) handleStoppedEvent(msg dap.Message) {
 			spinner := NewSpinner()
 			spinner.Start()
 
-			analysis, err := GetFixFromAI(ctx, s.proxy.apiKey)
-			
+			analysis, err := GetFixFromAI(ctx)
+
 			spinner.Stop()
 
 			if err != nil {
 				log.Printf("AI analysis failed: %v", err)
+				fmt.Println(RenderWarning(fmt.Sprintf("AI analysis failed: %v", err)))
 				return
 			}
 
@@ -200,19 +251,32 @@ func (s *session) handleStoppedEvent(msg dap.Message) {
 		if reason == "exception" || reason == "panic" || reason == "error" {
 			runAI()
 		} else if reason == "breakpoint" || reason == "step" {
-			fmt.Println("\nLocal Variables:")
+			fmt.Println(RenderInfo("Local Variables:"))
 			for _, v := range ctx.Variables {
 				fmt.Printf("  %s = %s\n", v.Name, v.Value)
 			}
-			
-			fmt.Print("\n[FixPoint] Breakpoint hit. Press [Enter] to run AI analysis, or type 'c' to skip: ")
-			reader := bufio.NewReader(os.Stdin)
-			input, _ := reader.ReadString('\n')
-			input = strings.TrimSpace(input)
-			if input == "" {
-				runAI()
-			} else {
-				fmt.Println("Skipping AI analysis.")
+
+			promptCtx, promptCf := context.WithCancel(context.Background())
+			s.promptMu.Lock()
+			s.promptCf = promptCf
+			s.promptMu.Unlock()
+
+			fmt.Print(RenderPrompt("\n[FixPoint] Press [Enter] for AI analysis, or type 'c' to skip: "))
+
+			select {
+			case <-s.stdinCh:
+			default:
+			}
+
+			select {
+			case input := <-s.stdinCh:
+				if input == "" || input == "a" {
+					runAI()
+				} else {
+					fmt.Println(RenderInfo("Skipping AI analysis."))
+				}
+			case <-promptCtx.Done():
+				fmt.Println(RenderInfo("Prompt cancelled (debugger resumed)."))
 			}
 		}
 	}()

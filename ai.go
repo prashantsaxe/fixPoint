@@ -13,30 +13,35 @@ import (
 	"time"
 )
 
-const fixPointSystemPrompt = "You are FixPoint, an expert Go debugger. You are given a stack trace, local variables, and a code snippet from a breakpoint. Provide a detailed diagnosis of why execution stopped, identify the likely root cause, and propose a concrete code fix with rationale. Respond using sections: 1) What Happened, 2) Root Cause, 3) Evidence From Context, 4) Proposed Fix, 5) Validation Steps."
-const defaultGeminiModel = "gemini-flash-latest"
+const fixPointSystemPrompt = `You are FixPoint, an expert software engineer and debugger. You are given a stack trace, local variables, and a code snippet from a breakpoint. Provide a detailed diagnosis of why execution stopped, identify the likely root cause, and propose a concrete code fix with rationale.
 
-func GetFixFromAI(ctx *DebugContext, apiKey string) (string, error) {
-	if strings.TrimSpace(apiKey) == "" {
-		return "", fmt.Errorf("missing API key")
+Respond using these sections:
+1) What Happened — a concise summary of the state when execution paused.
+2) Root Cause — the most likely underlying bug or logic error.
+3) Evidence From Context — specific variable values, frame info, or code patterns that support your conclusion.
+4) Proposed Fix — a clear, actionable code change with explanation.
+5) Validation Steps — how to verify the fix works.`
+
+func GetFixFromAI(ctx *DebugContext) (string, error) {
+	apiKey := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
+	model := getOpenRouterModel()
+
+	if apiKey == "" {
+		return "", fmt.Errorf("missing OPENROUTER_API_KEY")
 	}
 
 	userPrompt := buildUserPrompt(ctx)
-	fullPrompt := fixPointSystemPrompt + "\n\n" + userPrompt
-	model := getGeminiModel()
+
+	messages := []map[string]string{
+		{"role": "system", "content": fixPointSystemPrompt},
+		{"role": "user", "content": userPrompt + "\n\nReturn a complete answer with specific code-level recommendations. If data is missing, state assumptions clearly."},
+	}
 
 	requestBody := map[string]any{
-		"contents": []map[string]any{
-			{
-				"parts": []map[string]string{
-					{"text": fullPrompt + "\n\nReturn a complete answer with specific code-level recommendations. If data is missing, state assumptions clearly."},
-				},
-			},
-		},
-		"generationConfig": map[string]any{
-			"temperature":     0.2,
-			"maxOutputTokens": 1400,
-		},
+		"model":    model,
+		"messages": messages,
+		"temperature": 0.2,
+		"max_tokens":  1600,
 	}
 
 	payload, err := json.Marshal(requestBody)
@@ -45,19 +50,20 @@ func GetFixFromAI(ctx *DebugContext, apiKey string) (string, error) {
 	}
 
 	payloadSizeKB := float64(len(payload)) / 1024.0
-	log.Printf("[FixPoint] Sending AI request (Payload: %.2f KB)...", payloadSizeKB)
+	log.Printf("[FixPoint] Sending AI request (Payload: %.2f KB, Model: %s)...", payloadSizeKB, model)
 
 	reqCtx, cancel := stdctx.WithTimeout(stdctx.Background(), 90*time.Second)
 	defer cancel()
 
-	endpoint := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", model)
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "https://openrouter.ai/api/v1/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return "", err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-goog-api-key", apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("HTTP-Referer", "https://github.com/anomalyco/fixpoint")
+	req.Header.Set("X-Title", "FixPoint")
 
 	client := &http.Client{Timeout: 90 * time.Second}
 	resp, err := client.Do(req)
@@ -73,42 +79,44 @@ func GetFixFromAI(ctx *DebugContext, apiKey string) (string, error) {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		errText := strings.TrimSpace(string(responseBytes))
-		if resp.StatusCode == http.StatusTooManyRequests {
-			return "", fmt.Errorf("Gemini free-tier quota/rate limit hit (429): %s", errText)
-		}
-		return "", fmt.Errorf("AI API error (%d): %s", resp.StatusCode, errText)
+		return "", fmt.Errorf("OpenRouter API error (%d): %s", resp.StatusCode, errText)
 	}
 
 	var apiResp struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error,omitempty"`
 	}
 
 	if err := json.Unmarshal(responseBytes, &apiResp); err != nil {
 		return "", err
 	}
 
-	if len(apiResp.Candidates) == 0 || len(apiResp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("AI API returned empty response")
+	if apiResp.Error != nil && apiResp.Error.Message != "" {
+		return "", fmt.Errorf("OpenRouter API error: %s", apiResp.Error.Message)
 	}
 
-	content := strings.TrimSpace(apiResp.Candidates[0].Content.Parts[0].Text)
+	if len(apiResp.Choices) == 0 {
+		return "", fmt.Errorf("OpenRouter API returned empty choices")
+	}
+
+	content := strings.TrimSpace(apiResp.Choices[0].Message.Content)
 	if content == "" {
-		return "", fmt.Errorf("AI API returned empty response")
+		return "", fmt.Errorf("OpenRouter API returned empty response")
 	}
 
 	return content, nil
 }
 
-func getGeminiModel() string {
-	model := strings.TrimSpace(os.Getenv("GEMINI_MODEL"))
+func getOpenRouterModel() string {
+	model := strings.TrimSpace(os.Getenv("OPENROUTER_MODEL"))
 	if model == "" {
-		return defaultGeminiModel
+		return "google/gemini-2.5-flash"
 	}
 	return model
 }

@@ -8,35 +8,70 @@ import (
 )
 
 var (
+	baseStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#1E293B", Dark: "#E2E8F0"})
+
 	breakpointHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.AdaptiveColor{Light: "#005F87", Dark: "#7DD3FC"})
+				Foreground(lipgloss.AdaptiveColor{Light: "#6366F1", Dark: "#A5B4FC"}).
+				MarginBottom(1)
+
+	sourceCardStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.AdaptiveColor{Light: "#CBD5E1", Dark: "#334155"}).
+			Background(lipgloss.AdaptiveColor{Light: "#F8FAFC", Dark: "#0F172A"}).
+			Padding(0, 1, 1, 1)
 
 	lineNumberStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#9CA3AF"})
+			Foreground(lipgloss.AdaptiveColor{Light: "#94A3B8", Dark: "#475569"}).
+			Width(4).
+			Align(lipgloss.Right)
+
+	separatorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#CBD5E1", Dark: "#334155"})
 
 	sourceLineStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#111827", Dark: "#E5E7EB"})
+			Foreground(lipgloss.AdaptiveColor{Light: "#334155", Dark: "#CBD5E1"})
 
 	highlightedSourceStyle = lipgloss.NewStyle().
-				Background(lipgloss.AdaptiveColor{Light: "#DBEAFE", Dark: "#1E3A8A"}).
-				Foreground(lipgloss.AdaptiveColor{Light: "#111827", Dark: "#F9FAFB"}).
+				Background(lipgloss.AdaptiveColor{Light: "#E0E7FF", Dark: "#1E1B4B"}).
+				Foreground(lipgloss.AdaptiveColor{Light: "#3730A3", Dark: "#C7D2FE"}).
 				Bold(true)
 
-	aiCardStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.AdaptiveColor{Light: "#4F46E5", Dark: "#818CF8"}).
-			Background(lipgloss.AdaptiveColor{Light: "#EEF2FF", Dark: "#1F2340"}).
-			Foreground(lipgloss.AdaptiveColor{Light: "#111827", Dark: "#E5E7EB"}).
-			Padding(1, 2)
+	aiPanelStyle = lipgloss.NewStyle().
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(lipgloss.AdaptiveColor{Light: "#6366F1", Dark: "#818CF8"}).
+			Background(lipgloss.AdaptiveColor{Light: "#EEF2FF", Dark: "#1E1B4B"}).
+			Foreground(lipgloss.AdaptiveColor{Light: "#1E293B", Dark: "#E2E8F0"}).
+			Padding(1, 2).
+			Width(80)
 
 	warningStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#9A3412", Dark: "#FDBA74"}).
+			Foreground(lipgloss.AdaptiveColor{Light: "#D97706", Dark: "#FBBF24"}).
+			Bold(true)
+
+	infoStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#9CA3AF"}).
+			Italic(true)
+
+	promptStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.AdaptiveColor{Light: "#6366F1", Dark: "#A5B4FC"}).
 			Bold(true)
 )
 
 func RenderBreakpointHeader(reason string, threadID int) string {
-	return breakpointHeaderStyle.Render(fmt.Sprintf("🎯 Breakpoint Hit! Reason: %s | ThreadId: %d", reason, threadID))
+	symbol := ""
+	switch strings.ToLower(reason) {
+	case "breakpoint":
+		symbol = "breakpoint"
+	case "exception", "panic", "error":
+		symbol = "exception"
+	case "step":
+		symbol = "step"
+	default:
+		symbol = reason
+	}
+	return breakpointHeaderStyle.Render(fmt.Sprintf("  %s  threadId=%d", symbol, threadID))
 }
 
 func RenderSourceWindow(ctx *DebugContext) string {
@@ -45,31 +80,38 @@ func RenderSourceWindow(ctx *DebugContext) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(breakpointHeaderStyle.Render("Source Window"))
-	b.WriteString("\n")
-
 	for _, line := range ctx.SourceSnippet {
-		lineNo := lineNumberStyle.Render(fmt.Sprintf("%4d", line.LineNumber))
-		prefix := "  "
+		lineNo := lineNumberStyle.Render(fmt.Sprintf("%d", line.LineNumber))
+		sep := separatorStyle.Render("|")
 		text := sourceLineStyle.Render(line.Text)
 
 		if line.LineNumber == ctx.SourceLine {
-			prefix = "> "
 			text = highlightedSourceStyle.Render(line.Text)
+			b.WriteString(fmt.Sprintf("> %s %s %s\n", lineNo, sep, text))
+		} else {
+			b.WriteString(fmt.Sprintf("  %s %s %s\n", lineNo, sep, text))
 		}
-
-		b.WriteString(fmt.Sprintf("%s%s | %s\n", prefix, lineNo, text))
 	}
 
-	return strings.TrimRight(b.String(), "\n")
+	return sourceCardStyle.Render(strings.TrimRight(b.String(), "\n"))
 }
 
 func RenderAIResponseCard(analysis string) string {
-	title := breakpointHeaderStyle.Render("🤖 FixPoint AI Analysis")
-	body := aiCardStyle.Render(strings.TrimSpace(analysis))
-	return title + "\n" + body
+	var b strings.Builder
+	b.WriteString(breakpointHeaderStyle.Render("  analysis"))
+	b.WriteString("\n")
+	b.WriteString(aiPanelStyle.Render(strings.TrimSpace(analysis)))
+	return b.String()
 }
 
 func RenderWarning(message string) string {
-	return warningStyle.Render("⚠ " + message)
+	return warningStyle.Render(message)
+}
+
+func RenderInfo(message string) string {
+	return infoStyle.Render(message)
+}
+
+func RenderPrompt(message string) string {
+	return promptStyle.Render(message)
 }

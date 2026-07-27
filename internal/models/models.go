@@ -1,4 +1,4 @@
-package main
+package models
 
 // SourceLine stores one line of source with its original line number.
 type SourceLine struct {

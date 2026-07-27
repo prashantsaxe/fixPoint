@@ -1,0 +1,6 @@
+.env
+__debug_bin*
+*.exe
+*.exe~
+launch.json
+.vscode/launch.json
